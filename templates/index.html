@@ -130,13 +130,7 @@
         }
 
         .file-label input {
-            position: absolute;
-            opacity: 0;
-            width: 100%;
-            height: 100%;
-            top: 0;
-            left: 0;
-            cursor: pointer;
+            display: none;
         }
 
         .file-name {
@@ -324,10 +318,10 @@
 
                 <div class="input-section">
                     <h2><span class="icon">&#128196;</span> Upload PDF File</h2>
-                    <label class="file-label" id="fileLabel">
-                        <input type="file" id="fileInput" name="file" accept=".pdf">
+                    <input type="file" id="fileInput" name="file" accept=".pdf" style="display:none;">
+                    <div class="file-label" id="fileLabel">
                         <span>Click to select or drag & drop PDF here</span>
-                    </label>
+                    </div>
                     <div class="file-name" id="fileName"></div>
                 </div>
 
@@ -368,6 +362,12 @@
         const copyBtn = document.getElementById('copyBtn');
 
         // File input handling
+        fileLabel.addEventListener('click', function(e) {
+            if (e.target !== fileInput) {
+                fileInput.click();
+            }
+        });
+
         fileInput.addEventListener('change', function() {
             if (this.files.length > 0) {
                 fileName.textContent = this.files[0].name;

@@ -37,11 +37,6 @@ env/
 .env
 .env.local
 .env.*.local
-local.settings.json
-
-# Azure Functions
-.python_packages/
-.funcignore
 
 # Logs
 *.log
@@ -62,8 +57,5 @@ htmlcov/
 .coverage.*
 .pytest_cache/
 
-# Secrets and credentials
-*.pem
-*.key
-credentials.json
-secrets/
+# Uploaded files (temp)
+uploads/

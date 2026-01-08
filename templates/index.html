@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlanSet Review Agent</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #2B579A;
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 1rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+
+        .input-section {
+            margin-bottom: 20px;
+        }
+
+        .input-section h2 {
+            font-size: 1.1rem;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .input-section h2 .icon {
+            font-size: 1.3rem;
+        }
+
+        .divider {
+            text-align: center;
+            margin: 25px 0;
+            color: #999;
+            position: relative;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            width: 40%;
+            height: 1px;
+            background: #ddd;
+        }
+
+        .divider::before { left: 0; }
+        .divider::after { right: 0; }
+
+        input[type="text"],
+        input[type="file"] {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #2B579A;
+        }
+
+        input[type="file"] {
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+        }
+
+        .file-label {
+            display: block;
+            padding: 15px;
+            border: 2px dashed #ddd;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fafafa;
+        }
+
+        .file-label:hover {
+            border-color: #2B579A;
+            background: #f0f4f8;
+        }
+
+        .file-label.dragover {
+            border-color: #2B579A;
+            background: #e8f0fe;
+        }
+
+        .file-label input {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            cursor: pointer;
+        }
+
+        .file-name {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: #2B579A;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+        }
+
+        .btn:hover:not(:disabled) {
+            background: #1e3f6f;
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #545b62;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .status.loading {
+            display: block;
+            background: #e8f0fe;
+            color: #2B579A;
+        }
+
+        .status.error {
+            display: block;
+            background: #fde8e8;
+            color: #c53030;
+        }
+
+        .status.success {
+            display: block;
+            background: #e6f7e6;
+            color: #2f7d32;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #2B579A;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .report-section {
+            display: none;
+        }
+
+        .report-section.visible {
+            display: block;
+        }
+
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .report-header h2 {
+            color: #2B579A;
+        }
+
+        .report-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 6px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .copy-btn {
+            padding: 8px 16px;
+            font-size: 0.9rem;
+        }
+
+        .copy-btn.copied {
+            background: #2f7d32;
+        }
+
+        .info-box {
+            background: #fff8e6;
+            border-left: 4px solid #f0ad4e;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .info-box h3 {
+            color: #856404;
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+
+        .info-box p {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+
+        .info-box code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+        }
+
+        footer {
+            text-align: center;
+            color: #999;
+            font-size: 0.85rem;
+            margin-top: 30px;
+        }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 1.5rem; }
+            .card { padding: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PlanSet Review Agent</h1>
+            <p class="subtitle">Civil Engineering PM Review Tool</p>
+        </header>
+
+        <div class="card">
+            <div class="info-box">
+                <h3>How to use</h3>
+                <p><strong>Option 1:</strong> Upload a PDF planset directly (any size)</p>
+                <p><strong>Option 2:</strong> Paste a OneDrive or SharePoint sharing link</p>
+                <p>Supported formats: <code>.pdf</code></p>
+            </div>
+
+            <form id="reviewForm">
+                <div class="input-section">
+                    <h2><span class="icon">&#128279;</span> Paste OneDrive/SharePoint Link</h2>
+                    <input type="text" id="urlInput" name="url" 
+                           placeholder="https://company.sharepoint.com/... or https://1drv.ms/...">
+                </div>
+
+                <div class="divider">OR</div>
+
+                <div class="input-section">
+                    <h2><span class="icon">&#128196;</span> Upload PDF File</h2>
+                    <label class="file-label" id="fileLabel">
+                        <input type="file" id="fileInput" name="file" accept=".pdf">
+                        <span>Click to select or drag & drop PDF here</span>
+                    </label>
+                    <div class="file-name" id="fileName"></div>
+                </div>
+
+                <button type="submit" class="btn" id="submitBtn">
+                    Review Planset
+                </button>
+            </form>
+
+            <div class="status" id="status"></div>
+        </div>
+
+        <div class="card report-section" id="reportSection">
+            <div class="report-header">
+                <h2>Review Report</h2>
+                <button class="btn btn-secondary copy-btn" id="copyBtn">
+                    Copy to Clipboard
+                </button>
+            </div>
+            <div class="report-content" id="reportContent"></div>
+        </div>
+
+        <footer>
+            <p>PlanSet Review Agent &bull; For internal use only</p>
+            <p>Questions? Contact Jonah Knip</p>
+        </footer>
+    </div>
+
+    <script>
+        const form = document.getElementById('reviewForm');
+        const urlInput = document.getElementById('urlInput');
+        const fileInput = document.getElementById('fileInput');
+        const fileLabel = document.getElementById('fileLabel');
+        const fileName = document.getElementById('fileName');
+        const submitBtn = document.getElementById('submitBtn');
+        const status = document.getElementById('status');
+        const reportSection = document.getElementById('reportSection');
+        const reportContent = document.getElementById('reportContent');
+        const copyBtn = document.getElementById('copyBtn');
+
+        // File input handling
+        fileInput.addEventListener('change', function() {
+            if (this.files.length > 0) {
+                fileName.textContent = this.files[0].name;
+                urlInput.value = ''; // Clear URL if file selected
+            } else {
+                fileName.textContent = '';
+            }
+        });
+
+        // Drag and drop
+        fileLabel.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            this.classList.add('dragover');
+        });
+
+        fileLabel.addEventListener('dragleave', function() {
+            this.classList.remove('dragover');
+        });
+
+        fileLabel.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                fileName.textContent = e.dataTransfer.files[0].name;
+                urlInput.value = '';
+            }
+        });
+
+        // Clear file if URL entered
+        urlInput.addEventListener('input', function() {
+            if (this.value.trim()) {
+                fileInput.value = '';
+                fileName.textContent = '';
+            }
+        });
+
+        // Form submission
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const url = urlInput.value.trim();
+            const file = fileInput.files[0];
+
+            if (!url && !file) {
+                showStatus('error', 'Please provide a URL or upload a PDF file.');
+                return;
+            }
+
+            // Prepare form data
+            const formData = new FormData();
+            if (url) {
+                formData.append('url', url);
+            } else {
+                formData.append('file', file);
+            }
+
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+            showStatus('loading', '<span class="spinner"></span>Analyzing planset... This may take a minute for large files.');
+            reportSection.classList.remove('visible');
+
+            try {
+                const response = await fetch('/api/review', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('success', `Analysis complete! Reviewed ${data.page_count} pages.`);
+                    reportContent.textContent = data.report;
+                    reportSection.classList.add('visible');
+                    reportSection.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    showStatus('error', `Error: ${data.error}`);
+                }
+            } catch (error) {
+                showStatus('error', `Network error: ${error.message}`);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Review Planset';
+            }
+        });
+
+        // Copy to clipboard
+        copyBtn.addEventListener('click', async function() {
+            const text = reportContent.textContent;
+            
+            try {
+                await navigator.clipboard.writeText(text);
+                this.textContent = 'Copied!';
+                this.classList.add('copied');
+                setTimeout(() => {
+                    this.textContent = 'Copy to Clipboard';
+                    this.classList.remove('copied');
+                }, 2000);
+            } catch (err) {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                this.textContent = 'Copied!';
+                this.classList.add('copied');
+                setTimeout(() => {
+                    this.textContent = 'Copy to Clipboard';
+                    this.classList.remove('copied');
+                }, 2000);
+            }
+        });
+
+        function showStatus(type, message) {
+            status.className = 'status ' + type;
+            status.innerHTML = message;
+        }
+    </script>
+</body>
+</html>

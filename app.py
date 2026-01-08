@@ -140,8 +140,11 @@ def analyze_planset(pdf_path: str) -> dict:
         # Get page count
         page_count = len(agent.doc)
         
-        # Generate report
-        report = agent.generate_summary_report()
+        # Generate AI-powered HTML report (falls back to basic if no API key)
+        report = agent.generate_ai_report()
+        
+        # Check if report is HTML or plain text
+        is_html = report.strip().startswith('<')
         
         # Get JSON data for structured display
         json_data = agent.export_json()
@@ -150,6 +153,7 @@ def analyze_planset(pdf_path: str) -> dict:
             'success': True,
             'page_count': page_count,
             'report': report,
+            'is_html': is_html,
             'data': json_data
         }
     except Exception as e:

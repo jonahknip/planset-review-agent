@@ -9,10 +9,18 @@ import fitz  # PyMuPDF
 import re
 import json
 import sys
+import os
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from datetime import datetime
+
+# OpenAI for AI-powered report generation
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 
 @dataclass
@@ -453,6 +461,99 @@ End of Report
             'review_flags': self.analysis.review_flags,
             'completeness_score': self.analysis.completeness_score,
         }
+
+    def generate_ai_report(self) -> str:
+        """Generate a professional HTML report using OpenAI"""
+        if not OPENAI_AVAILABLE:
+            return self.generate_summary_report()
+        
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            return self.generate_summary_report()
+        
+        if not self.analysis.total_sheets:
+            self.perform_full_analysis()
+        
+        # Prepare analysis data for the AI
+        analysis_data = self.export_json()
+        info = self.analysis.project_info
+        
+        # Extract first few pages of text for context (limit to avoid token limits)
+        sample_text = ""
+        for i, page in enumerate(self.doc[:5]):  # First 5 pages
+            sample_text += f"\n--- Page {i+1} ---\n"
+            sample_text += page.get_text()[:2000]  # Limit per page
+        
+        prompt = f"""You are a senior Civil Engineering Project Manager reviewing a construction plan set. 
+Generate a professional, detailed review report in HTML format that looks like a formal Word document.
+
+ANALYSIS DATA:
+- Project Name: {info.project_name or 'Not identified'}
+- Project Number: {info.project_number or 'Not identified'}
+- Location: {info.location or 'Not identified'}
+- Owner/Client: {info.owner or 'Not identified'}
+- Engineer of Record: {info.engineer_of_record or 'Not identified'}
+- PE License: {info.engineer_license or 'Not identified'}
+- Total Sheets: {self.analysis.total_sheets}
+- Station Range: {self.analysis.station_range[0] or 'N/A'} to {self.analysis.station_range[1] or 'N/A'}
+- Completeness Score: {self.analysis.completeness_score:.0f}%
+- Disciplines Covered: {', '.join(self.analysis.disciplines_covered) or 'None identified'}
+- Key Features: {', '.join(self.analysis.key_features) or 'None identified'}
+- Review Flags: {', '.join(self.analysis.review_flags) or 'None'}
+- Sheet Index: {json.dumps(self.analysis.sheet_index, indent=2)}
+
+SAMPLE TEXT FROM PLAN SET:
+{sample_text[:4000]}
+
+Generate an HTML report with these sections:
+1. HEADER - Project title, date, reviewer info
+2. EXECUTIVE SUMMARY - Brief overview of the project scope and status
+3. PROJECT INFORMATION - Table with all project details
+4. PLAN SET CONTENTS - Summary of sheets and disciplines
+5. KEY FINDINGS - Important observations from the review
+6. ITEMS REQUIRING ATTENTION - Issues, missing items, flags
+7. RECOMMENDATIONS - Specific action items for the PM
+8. NEXT STEPS - Prioritized to-do list with checkboxes
+
+Use professional styling:
+- Clean typography with proper headings (h1, h2, h3)
+- Tables with borders for data
+- Bullet points and numbered lists
+- Color coding: red for critical issues, orange for warnings, green for complete items
+- Professional blue header bar
+- Proper spacing and margins
+
+Return ONLY the HTML content (no markdown, no code blocks). Start with a <div> wrapper."""
+
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a professional civil engineering project manager. Generate clean, professional HTML reports."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=4000,
+                temperature=0.7
+            )
+            
+            html_report = response.choices[0].message.content
+            
+            # Clean up any markdown code block markers if present
+            html_report = html_report.strip()
+            if html_report.startswith('```html'):
+                html_report = html_report[7:]
+            if html_report.startswith('```'):
+                html_report = html_report[3:]
+            if html_report.endswith('```'):
+                html_report = html_report[:-3]
+            
+            return html_report.strip()
+            
+        except Exception as e:
+            # Fall back to basic report on error
+            print(f"OpenAI error: {e}")
+            return self.generate_summary_report()
 
 
 def main():

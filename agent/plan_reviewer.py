@@ -325,132 +325,117 @@ class CivilEngineeringPMAgent:
         return self.analysis
 
     def generate_summary_report(self) -> str:
-        """Generate a PM-style summary report"""
+        """Generate a concise one-page PM review report"""
         if not self.analysis.total_sheets:
             self.perform_full_analysis()
 
         info = self.analysis.project_info
+        
+        # Identify missing/incomplete items
+        missing_items = []
+        if not info.project_name:
+            missing_items.append("Project name not identified on cover sheet")
+        if not info.project_number:
+            missing_items.append("Project number not found")
+        if not info.engineer_of_record:
+            missing_items.append("Engineer of Record not identified")
+        if not info.engineer_license:
+            missing_items.append("PE license number not found")
+        if not self.analysis.sheet_index:
+            missing_items.append("Sheet index could not be parsed")
+        if self.analysis.station_range[0] == "" and self.analysis.station_range[1] == "":
+            missing_items.append("Station range not identified")
+        
+        # Check for missing expected disciplines
+        expected_disciplines = {'cover', 'grading', 'drainage', 'details'}
+        found_disciplines = set(self.analysis.disciplines_covered)
+        missing_disciplines = expected_disciplines - found_disciplines
+        for disc in missing_disciplines:
+            missing_items.append(f"Missing discipline: {disc.replace('_', ' ').title()}")
+        
+        # Build concise report
+        report = f"""PLANSET REVIEW REPORT
+{'='*60}
+Date: {datetime.now().strftime('%Y-%m-%d')}    Sheets: {self.analysis.total_sheets}    Completeness: {self.analysis.completeness_score:.0f}%
 
-        report = f"""
-================================================================================
-                    CIVIL ENGINEERING PLAN SET REVIEW REPORT
-================================================================================
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-Reviewed by: Civil Engineering PM Agent
+PROJECT SUMMARY
+{'-'*60}
+Project:  {info.project_name or '[NOT FOUND]'}
+Number:   {info.project_number or '[NOT FOUND]'}
+Location: {info.location or '[NOT FOUND]'}
+Owner:    {info.owner or '[NOT FOUND]'}
+Engineer: {info.engineer_of_record or '[NOT FOUND]'} {('(PE ' + info.engineer_license + ')') if info.engineer_license else ''}
+Stations: {self.analysis.station_range[0] or 'N/A'} to {self.analysis.station_range[1] or 'N/A'}
 
---------------------------------------------------------------------------------
-                              PROJECT INFORMATION
---------------------------------------------------------------------------------
-Project Name:       {info.project_name or 'Not identified'}
-Project Number:     {info.project_number or 'Not identified'}
-Location:           {info.location or 'Not identified'}
-Owner/Client:       {info.owner or 'Not identified'}
-Engineer of Record: {info.engineer_of_record or 'Not identified'}
-PE License:         {info.engineer_license or 'Not identified'}
+DISCIPLINES: {', '.join(sorted([d.replace('_', ' ').title() for d in self.analysis.disciplines_covered])) or 'None identified'}
 
---------------------------------------------------------------------------------
-                              PLAN SET OVERVIEW
---------------------------------------------------------------------------------
-Total Sheets:       {self.analysis.total_sheets}
-Station Range:      {self.analysis.station_range[0]} to {self.analysis.station_range[1]}
-Completeness Score: {self.analysis.completeness_score:.0f}%
-
---------------------------------------------------------------------------------
-                                SHEET INDEX
---------------------------------------------------------------------------------"""
-
-        if self.analysis.sheet_index:
-            for sheets, title in sorted(self.analysis.sheet_index.items()):
-                report += f"\n  Sheets {sheets}: {title}"
-        else:
-            report += "\n  Sheet index could not be parsed from cover sheet"
-
-        report += f"""
-
---------------------------------------------------------------------------------
-                          DISCIPLINES COVERED
---------------------------------------------------------------------------------"""
-
-        if self.analysis.disciplines_covered:
-            for discipline in sorted(self.analysis.disciplines_covered):
-                report += f"\n  [x] {discipline.replace('_', ' ').title()}"
-        else:
-            report += "\n  No disciplines identified"
-
-        report += f"""
-
---------------------------------------------------------------------------------
-                            KEY PROJECT FEATURES
---------------------------------------------------------------------------------"""
-
-        if self.analysis.key_features:
-            for feature in sorted(self.analysis.key_features):
-                report += f"\n  - {feature}"
-        else:
-            report += "\n  No key features identified"
-
-        report += f"""
-
---------------------------------------------------------------------------------
-                        PM REVIEW FLAGS & ACTION ITEMS
---------------------------------------------------------------------------------"""
-
-        if self.analysis.review_flags:
-            for i, flag in enumerate(self.analysis.review_flags, 1):
-                report += f"\n  {i}. {flag}"
-        else:
-            report += "\n  No special review items flagged"
-
-        report += f"""
-
---------------------------------------------------------------------------------
-                              PM RECOMMENDATIONS
---------------------------------------------------------------------------------
-Based on the plan review, the following recommendations are provided:
-
-1. COORDINATION ITEMS:"""
-
-        if 'Potential utility conflicts' in self.analysis.review_flags:
-            report += "\n   - Schedule utility coordination meeting prior to construction"
-        if 'Railroad coordination needed' in self.analysis.review_flags:
-            report += "\n   - Initiate railroad permit application process"
-        if 'Signal work included' in self.analysis.key_features or 'Traffic signals' in self.analysis.key_features:
-            report += "\n   - Coordinate with traffic signal contractor"
-
-        report += "\n   - Conduct pre-construction meeting with all stakeholders"
-
-        report += """
-
-2. PERMIT REQUIREMENTS:"""
-
-        if 'Erosion control' in self.analysis.key_features:
-            report += "\n   - Ensure NPDES permit/Rule 5 permit is obtained"
-        if 'Floodplain considerations' in self.analysis.review_flags:
-            report += "\n   - Verify floodplain development permit status"
-        report += "\n   - Verify all ROW permits are secured before construction"
-
-        report += """
-
-3. SCHEDULE CONSIDERATIONS:"""
-
-        if 'Maintenance of traffic' in (self.analysis.sheet_index.get(k, '').lower() for k in self.analysis.sheet_index):
-            report += "\n   - Review MOT plans for traffic impact minimization"
-        if 'Landscape' in str(self.analysis.disciplines_covered).lower():
-            report += "\n   - Coordinate planting with appropriate seasons"
-        report += "\n   - Identify long-lead procurement items"
-
-        report += """
-
-4. QUALITY ASSURANCE:
-   - Verify all sheets are sealed and signed by PE
-   - Confirm all survey monuments are properly documented
-   - Review specification references for completeness
-
---------------------------------------------------------------------------------
-                               END OF REPORT
---------------------------------------------------------------------------------
+KEY FEATURES: {', '.join(sorted(self.analysis.key_features)[:8]) or 'None identified'}
 """
 
+        # Issues/Errors Section
+        if missing_items or self.analysis.review_flags:
+            report += f"""
+ISSUES & FLAGS
+{'-'*60}
+"""
+            if missing_items:
+                report += "Missing/Incomplete:\n"
+                for item in missing_items[:5]:  # Limit to 5
+                    report += f"  ! {item}\n"
+            
+            if self.analysis.review_flags:
+                report += "Review Flags:\n"
+                for flag in self.analysis.review_flags[:5]:  # Limit to 5
+                    report += f"  * {flag}\n"
+        
+        # Generate To-Do list based on findings
+        todos = []
+        
+        # Always include these
+        todos.append("Verify PE seal and signature on all sheets")
+        
+        # Conditional todos based on findings
+        if not info.project_number:
+            todos.append("Confirm project number with client")
+        if 'Potential utility conflicts' in self.analysis.review_flags:
+            todos.append("Schedule utility coordination meeting")
+        if 'Permit requirements identified' in self.analysis.review_flags:
+            todos.append("Verify all permits obtained")
+        if 'Easement areas noted' in self.analysis.review_flags:
+            todos.append("Confirm easement acquisitions complete")
+        if 'ROW acquisition may be needed' in self.analysis.review_flags:
+            todos.append("Verify ROW acquisition status")
+        if 'Project phasing indicated' in self.analysis.review_flags:
+            todos.append("Review phasing plan with contractor")
+        if 'Erosion control' in self.analysis.key_features:
+            todos.append("Confirm NPDES/erosion control permit")
+        if 'Floodplain considerations' in self.analysis.review_flags:
+            todos.append("Verify floodplain permit status")
+        if 'Railroad coordination needed' in self.analysis.review_flags:
+            todos.append("Initiate railroad coordination")
+        if 'Traffic signals' in self.analysis.key_features:
+            todos.append("Coordinate with signal contractor")
+        if 'drainage' in self.analysis.disciplines_covered:
+            todos.append("Review drainage calculations")
+        if missing_disciplines:
+            todos.append("Request missing plan sheets from designer")
+        
+        # Add generic items if list is short
+        if len(todos) < 5:
+            todos.append("Conduct pre-construction meeting")
+            todos.append("Identify long-lead procurement items")
+        
+        report += f"""
+PM TO-DO LIST
+{'-'*60}
+"""
+        for i, todo in enumerate(todos[:8], 1):  # Limit to 8 items
+            report += f"  [ ] {i}. {todo}\n"
+        
+        report += f"""
+{'='*60}
+End of Report
+"""
         return report
 
     def export_json(self) -> dict:

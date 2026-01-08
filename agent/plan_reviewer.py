@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+"""
+Civil Engineering Plan Set Review Agent
+A tool that acts as a Civil Engineering Project Manager to review construction plan sets
+and generate comprehensive summary reports.
+"""
+
+import fitz  # PyMuPDF
+import re
+import json
+import sys
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
+from typing import Optional
+from datetime import datetime
+
+
+@dataclass
+class SheetInfo:
+    """Information about a single sheet in the plan set"""
+    sheet_number: int
+    sheet_title: str = ""
+    stations: list = field(default_factory=list)
+    scale: str = ""
+    date: str = ""
+
+
+@dataclass
+class ProjectInfo:
+    """Core project identification information"""
+    project_name: str = ""
+    project_number: str = ""
+    location: str = ""
+    owner: str = ""
+    engineer_of_record: str = ""
+    engineer_license: str = ""
+    surveyor: str = ""
+    creation_date: str = ""
+    revision_date: str = ""
+
+
+@dataclass
+class PlanSetAnalysis:
+    """Complete analysis of a civil engineering plan set"""
+    project_info: ProjectInfo = field(default_factory=ProjectInfo)
+    total_sheets: int = 0
+    sheet_index: dict = field(default_factory=dict)
+    station_range: tuple = ("", "")
+    disciplines_covered: list = field(default_factory=list)
+    key_features: list = field(default_factory=list)
+    review_flags: list = field(default_factory=list)
+    completeness_score: float = 0.0
+    sheets: list = field(default_factory=list)
+
+
+class CivilEngineeringPMAgent:
+    """
+    Civil Engineering Project Manager Agent for Plan Set Review
+
+    This agent analyzes construction plan sets and generates comprehensive
+    summary reports from a PM perspective.
+    """
+
+    # Standard sheet types expected in a civil plan set
+    EXPECTED_SHEET_TYPES = {
+        'cover': ['cover', 'title', 'index'],
+        'typical_sections': ['typical', 'section', 'standard'],
+        'survey': ['survey', 'existing', 'topographic'],
+        'site_plan': ['site plan', 'layout', 'general plan'],
+        'grading': ['grading', 'earthwork', 'contour'],
+        'drainage': ['drainage', 'storm', 'swppp', 'erosion'],
+        'utilities': ['utility', 'water', 'sewer', 'electric', 'gas'],
+        'paving': ['paving', 'pavement', 'roadway'],
+        'signing_striping': ['sign', 'stripe', 'marking', 'traffic'],
+        'mot': ['mot', 'traffic control', 'maintenance of traffic'],
+        'landscape': ['landscape', 'planting', 'irrigation'],
+        'lighting': ['lighting', 'electrical', 'photometric'],
+        'structural': ['structural', 'retaining wall', 'bridge'],
+        'details': ['detail', 'construction detail'],
+    }
+
+    # Key items to flag for PM review
+    REVIEW_TRIGGERS = [
+        ('permit', 'Permit requirements identified'),
+        ('easement', 'Easement areas noted'),
+        ('utility conflict', 'Potential utility conflicts'),
+        ('phase', 'Project phasing indicated'),
+        ('temporary', 'Temporary construction elements'),
+        ('demolition', 'Demolition work required'),
+        ('retaining wall', 'Retaining wall construction'),
+        ('traffic signal', 'Signal work included'),
+        ('railroad', 'Railroad coordination needed'),
+        ('wetland', 'Wetland areas present'),
+        ('floodplain', 'Floodplain considerations'),
+        ('ada', 'ADA compliance elements'),
+        ('right of way', 'ROW acquisition may be needed'),
+    ]
+
+    def __init__(self, pdf_path: str):
+        """Initialize the agent with a plan set PDF"""
+        self.pdf_path = Path(pdf_path)
+        if not self.pdf_path.exists():
+            raise FileNotFoundError(f"Plan set not found: {pdf_path}")
+
+        self.doc = fitz.open(str(self.pdf_path))
+        self.analysis = PlanSetAnalysis()
+        self.full_text = ""
+
+    def __del__(self):
+        """Clean up PDF document"""
+        if hasattr(self, 'doc') and self.doc:
+            self.doc.close()
+
+    def extract_all_text(self) -> str:
+        """Extract text from all pages"""
+        texts = []
+        for page in self.doc:
+            texts.append(page.get_text())
+        self.full_text = "\n".join(texts)
+        return self.full_text
+
+    def analyze_project_info(self) -> ProjectInfo:
+        """Extract project identification information"""
+        info = ProjectInfo()
+
+        # Get metadata
+        metadata = self.doc.metadata
+        info.creation_date = metadata.get('creationDate', '')
+        info.revision_date = metadata.get('modDate', '')
+
+        # Parse cover sheet (usually page 1)
+        cover_text = self.doc[0].get_text() if len(self.doc) > 0 else ""
+
+        # Extract project name - look for common patterns
+        project_patterns = [
+            r'([A-Z][A-Z\s\d\.\-]+(?:IMPROVEMENTS|PROJECT|CONSTRUCTION|DEVELOPMENT))',
+            r'(S\.?R\.?\s*\d+[^\n]+)',
+            r'PROJECT:\s*([^\n]+)',
+        ]
+        for pattern in project_patterns:
+            match = re.search(pattern, cover_text, re.IGNORECASE)
+            if match:
+                info.project_name = match.group(1).strip()
+                break
+
+        # Extract project number
+        project_num_match = re.search(r'(?:PA|PROJECT\s*(?:NO\.?|#)?)\s*(\d+)', cover_text, re.IGNORECASE)
+        if project_num_match:
+            info.project_number = project_num_match.group(1)
+
+        # Extract location
+        location_patterns = [
+            r'(SECTION\s+\d+[^\n]+(?:TOWNSHIP|COUNTY)[^\n]+)',
+            r'([A-Z][a-z]+\s+(?:County|Township)[^\n]*)',
+            r'(City of [A-Za-z\s]+)',
+        ]
+        for pattern in location_patterns:
+            match = re.search(pattern, cover_text)
+            if match:
+                info.location = match.group(1).strip()
+                break
+
+        # Extract owner/client
+        owner_patterns = [
+            r'(?:OWNER|CLIENT|FOR):\s*([^\n]+)',
+            r'(City of [A-Za-z\s]+)',
+            r'(County of [A-Za-z\s]+)',
+        ]
+        for pattern in owner_patterns:
+            match = re.search(pattern, cover_text, re.IGNORECASE)
+            if match:
+                info.owner = match.group(1).strip()
+                break
+
+        # Extract engineer info
+        eng_match = re.search(r'(?:ENGINEER|SURVEYOR)[^\n]*\n([^\n]+)', cover_text)
+        if eng_match:
+            info.engineer_of_record = eng_match.group(1).strip()
+
+        # Extract PE license number
+        pe_match = re.search(r'(?:PE|P\.E\.)\s*(?:NO\.?\s*)?(\d+)', cover_text)
+        if pe_match:
+            info.engineer_license = f"PE{pe_match.group(1)}"
+
+        self.analysis.project_info = info
+        return info
+
+    def analyze_sheet_index(self) -> dict:
+        """Parse the sheet index from cover sheet"""
+        cover_text = self.doc[0].get_text() if len(self.doc) > 0 else ""
+
+        sheet_index = {}
+
+        # Common sheet index patterns
+        # Pattern: Sheet numbers followed by title
+        index_patterns = [
+            r'(\d+(?:-\d+)?)\s+([A-Za-z][A-Za-z\s&:,\-]+)',
+        ]
+
+        for pattern in index_patterns:
+            matches = re.findall(pattern, cover_text)
+            for sheet_range, title in matches:
+                title = title.strip()
+                if len(title) > 3 and not title.isupper():  # Filter noise
+                    sheet_index[sheet_range] = title
+
+        self.analysis.sheet_index = sheet_index
+        return sheet_index
+
+    def analyze_station_range(self) -> tuple:
+        """Determine the project station range"""
+        if not self.full_text:
+            self.extract_all_text()
+
+        stations = re.findall(r'(\d+)\+(\d+)', self.full_text)
+        if stations:
+            station_values = [(int(s[0]) * 100 + int(s[1])) for s in stations]
+            min_sta = min(station_values)
+            max_sta = max(station_values)
+            self.analysis.station_range = (
+                f"{min_sta // 100}+{min_sta % 100:02d}",
+                f"{max_sta // 100}+{max_sta % 100:02d}"
+            )
+        return self.analysis.station_range
+
+    def identify_disciplines(self) -> list:
+        """Identify engineering disciplines covered in the plan set"""
+        if not self.full_text:
+            self.extract_all_text()
+
+        text_lower = self.full_text.lower()
+        disciplines = []
+
+        for discipline, keywords in self.EXPECTED_SHEET_TYPES.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    disciplines.append(discipline)
+                    break
+
+        self.analysis.disciplines_covered = list(set(disciplines))
+        return self.analysis.disciplines_covered
+
+    def identify_key_features(self) -> list:
+        """Identify key project features and scope elements"""
+        if not self.full_text:
+            self.extract_all_text()
+
+        text_lower = self.full_text.lower()
+        features = []
+
+        feature_keywords = {
+            'Roadway widening': ['widening', 'widen'],
+            'New pavement': ['new pavement', 'pavement construction'],
+            'Pavement rehabilitation': ['rehab', 'overlay', 'resurfacing'],
+            'Intersection improvements': ['intersection', 'turn lane'],
+            'Sidewalk construction': ['sidewalk', 'pedestrian'],
+            'Multi-use path': ['multi-use', 'trail', 'path'],
+            'Storm drainage': ['storm sewer', 'drainage', 'inlet'],
+            'Sanitary sewer': ['sanitary', 'sewer main'],
+            'Water main': ['water main', 'waterline'],
+            'Retaining walls': ['retaining wall', 'wall construction'],
+            'Bridge work': ['bridge', 'culvert'],
+            'Traffic signals': ['traffic signal', 'signal installation'],
+            'Street lighting': ['lighting', 'luminaire', 'light pole'],
+            'Landscaping': ['landscape', 'planting', 'tree'],
+            'Erosion control': ['erosion', 'swppp', 'bmp'],
+        }
+
+        for feature, keywords in feature_keywords.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    features.append(feature)
+                    break
+
+        self.analysis.key_features = list(set(features))
+        return self.analysis.key_features
+
+    def flag_review_items(self) -> list:
+        """Identify items requiring PM attention"""
+        if not self.full_text:
+            self.extract_all_text()
+
+        text_lower = self.full_text.lower()
+        flags = []
+
+        for trigger, description in self.REVIEW_TRIGGERS:
+            if trigger in text_lower:
+                flags.append(description)
+
+        self.analysis.review_flags = list(set(flags))
+        return self.analysis.review_flags
+
+    def calculate_completeness(self) -> float:
+        """Calculate plan set completeness score based on expected elements"""
+        expected_elements = [
+            ('cover', 'Cover sheet present'),
+            ('typical', 'Typical sections included'),
+            ('grading', 'Grading plans provided'),
+            ('detail', 'Construction details included'),
+            ('erosion', 'Erosion control plans'),
+        ]
+
+        if not self.full_text:
+            self.extract_all_text()
+
+        text_lower = self.full_text.lower()
+        found = sum(1 for keyword, _ in expected_elements if keyword in text_lower)
+
+        self.analysis.completeness_score = (found / len(expected_elements)) * 100
+        return self.analysis.completeness_score
+
+    def perform_full_analysis(self) -> PlanSetAnalysis:
+        """Perform complete plan set analysis"""
+        self.analysis.total_sheets = len(self.doc)
+
+        self.extract_all_text()
+        self.analyze_project_info()
+        self.analyze_sheet_index()
+        self.analyze_station_range()
+        self.identify_disciplines()
+        self.identify_key_features()
+        self.flag_review_items()
+        self.calculate_completeness()
+
+        return self.analysis
+
+    def generate_summary_report(self) -> str:
+        """Generate a PM-style summary report"""
+        if not self.analysis.total_sheets:
+            self.perform_full_analysis()
+
+        info = self.analysis.project_info
+
+        report = f"""
+================================================================================
+                    CIVIL ENGINEERING PLAN SET REVIEW REPORT
+================================================================================
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+Reviewed by: Civil Engineering PM Agent
+
+--------------------------------------------------------------------------------
+                              PROJECT INFORMATION
+--------------------------------------------------------------------------------
+Project Name:       {info.project_name or 'Not identified'}
+Project Number:     {info.project_number or 'Not identified'}
+Location:           {info.location or 'Not identified'}
+Owner/Client:       {info.owner or 'Not identified'}
+Engineer of Record: {info.engineer_of_record or 'Not identified'}
+PE License:         {info.engineer_license or 'Not identified'}
+
+--------------------------------------------------------------------------------
+                              PLAN SET OVERVIEW
+--------------------------------------------------------------------------------
+Total Sheets:       {self.analysis.total_sheets}
+Station Range:      {self.analysis.station_range[0]} to {self.analysis.station_range[1]}
+Completeness Score: {self.analysis.completeness_score:.0f}%
+
+--------------------------------------------------------------------------------
+                                SHEET INDEX
+--------------------------------------------------------------------------------"""
+
+        if self.analysis.sheet_index:
+            for sheets, title in sorted(self.analysis.sheet_index.items()):
+                report += f"\n  Sheets {sheets}: {title}"
+        else:
+            report += "\n  Sheet index could not be parsed from cover sheet"
+
+        report += f"""
+
+--------------------------------------------------------------------------------
+                          DISCIPLINES COVERED
+--------------------------------------------------------------------------------"""
+
+        if self.analysis.disciplines_covered:
+            for discipline in sorted(self.analysis.disciplines_covered):
+                report += f"\n  [x] {discipline.replace('_', ' ').title()}"
+        else:
+            report += "\n  No disciplines identified"
+
+        report += f"""
+
+--------------------------------------------------------------------------------
+                            KEY PROJECT FEATURES
+--------------------------------------------------------------------------------"""
+
+        if self.analysis.key_features:
+            for feature in sorted(self.analysis.key_features):
+                report += f"\n  - {feature}"
+        else:
+            report += "\n  No key features identified"
+
+        report += f"""
+
+--------------------------------------------------------------------------------
+                        PM REVIEW FLAGS & ACTION ITEMS
+--------------------------------------------------------------------------------"""
+
+        if self.analysis.review_flags:
+            for i, flag in enumerate(self.analysis.review_flags, 1):
+                report += f"\n  {i}. {flag}"
+        else:
+            report += "\n  No special review items flagged"
+
+        report += f"""
+
+--------------------------------------------------------------------------------
+                              PM RECOMMENDATIONS
+--------------------------------------------------------------------------------
+Based on the plan review, the following recommendations are provided:
+
+1. COORDINATION ITEMS:"""
+
+        if 'Potential utility conflicts' in self.analysis.review_flags:
+            report += "\n   - Schedule utility coordination meeting prior to construction"
+        if 'Railroad coordination needed' in self.analysis.review_flags:
+            report += "\n   - Initiate railroad permit application process"
+        if 'Signal work included' in self.analysis.key_features or 'Traffic signals' in self.analysis.key_features:
+            report += "\n   - Coordinate with traffic signal contractor"
+
+        report += "\n   - Conduct pre-construction meeting with all stakeholders"
+
+        report += """
+
+2. PERMIT REQUIREMENTS:"""
+
+        if 'Erosion control' in self.analysis.key_features:
+            report += "\n   - Ensure NPDES permit/Rule 5 permit is obtained"
+        if 'Floodplain considerations' in self.analysis.review_flags:
+            report += "\n   - Verify floodplain development permit status"
+        report += "\n   - Verify all ROW permits are secured before construction"
+
+        report += """
+
+3. SCHEDULE CONSIDERATIONS:"""
+
+        if 'Maintenance of traffic' in (self.analysis.sheet_index.get(k, '').lower() for k in self.analysis.sheet_index):
+            report += "\n   - Review MOT plans for traffic impact minimization"
+        if 'Landscape' in str(self.analysis.disciplines_covered).lower():
+            report += "\n   - Coordinate planting with appropriate seasons"
+        report += "\n   - Identify long-lead procurement items"
+
+        report += """
+
+4. QUALITY ASSURANCE:
+   - Verify all sheets are sealed and signed by PE
+   - Confirm all survey monuments are properly documented
+   - Review specification references for completeness
+
+--------------------------------------------------------------------------------
+                               END OF REPORT
+--------------------------------------------------------------------------------
+"""
+
+        return report
+
+    def export_json(self) -> dict:
+        """Export analysis as JSON-serializable dict"""
+        if not self.analysis.total_sheets:
+            self.perform_full_analysis()
+
+        return {
+            'project_info': asdict(self.analysis.project_info),
+            'total_sheets': self.analysis.total_sheets,
+            'sheet_index': self.analysis.sheet_index,
+            'station_range': list(self.analysis.station_range),
+            'disciplines_covered': self.analysis.disciplines_covered,
+            'key_features': self.analysis.key_features,
+            'review_flags': self.analysis.review_flags,
+            'completeness_score': self.analysis.completeness_score,
+        }
+
+
+def main():
+    """Main entry point for the plan reviewer"""
+    if len(sys.argv) < 2:
+        print("Usage: python plan_reviewer.py <path_to_plan_set.pdf> [--json]")
+        print("\nCivil Engineering PM Agent - Plan Set Review Tool")
+        print("Analyzes construction plan sets and generates PM summary reports.")
+        sys.exit(1)
+
+    pdf_path = sys.argv[1]
+    output_json = '--json' in sys.argv
+
+    try:
+        agent = CivilEngineeringPMAgent(pdf_path)
+
+        if output_json:
+            result = agent.export_json()
+            print(json.dumps(result, indent=2))
+        else:
+            report = agent.generate_summary_report()
+            print(report)
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error analyzing plan set: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

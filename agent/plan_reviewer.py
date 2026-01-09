@@ -462,7 +462,116 @@ End of Report
             'completeness_score': self.analysis.completeness_score,
         }
 
-    def generate_ai_report(self) -> str:
+    def extract_page_images(self, page_numbers: list = None, max_pages: int = 5) -> list:
+        """Extract images from PDF pages for vision analysis"""
+        import base64
+        
+        if page_numbers is None:
+            # Default to first few pages (cover, index, typical sections)
+            page_numbers = list(range(min(max_pages, len(self.doc))))
+        
+        images = []
+        for page_num in page_numbers:
+            if page_num >= len(self.doc):
+                continue
+            
+            page = self.doc[page_num]
+            # Render page to image at reasonable resolution
+            mat = fitz.Matrix(1.5, 1.5)  # 1.5x zoom for readability
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert to base64
+            img_bytes = pix.tobytes("png")
+            img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+            
+            images.append({
+                'page_num': page_num + 1,
+                'base64': img_base64,
+                'width': pix.width,
+                'height': pix.height
+            })
+        
+        return images
+
+    def analyze_with_vision(self, checklist: dict = None) -> dict:
+        """Use GPT-4 Vision to analyze plan sheet images"""
+        if not OPENAI_AVAILABLE:
+            return {'success': False, 'error': 'OpenAI not available'}
+        
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            return {'success': False, 'error': 'No API key'}
+        
+        # Extract images from key pages
+        images = self.extract_page_images(max_pages=5)
+        
+        if not images:
+            return {'success': False, 'error': 'Could not extract images'}
+        
+        # Build checklist prompt if provided
+        checklist_prompt = ""
+        if checklist:
+            checklist_prompt = "\n\nAlso verify these checklist items:\n"
+            for item in checklist.get('items', []):
+                req = "REQUIRED" if item.get('required') else "Optional"
+                checklist_prompt += f"- [{req}] {item['text']}\n"
+        
+        # Build messages with images
+        messages = [
+            {
+                "role": "system",
+                "content": """You are an expert Civil Engineering Project Manager reviewing construction plan sets. 
+Analyze the provided plan sheet images and extract:
+1. Project information from title blocks (name, number, owner, engineer, date)
+2. Sheet identification (sheet number, title, discipline)
+3. Key elements visible on each sheet
+4. Any issues, missing elements, or items requiring attention
+5. Professional seal/signature status
+
+Be thorough and specific. Note anything that appears incomplete or requires follow-up."""
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Please analyze these {len(images)} plan sheets from a construction planset. Identify all project information, sheet details, and any issues or items requiring attention.{checklist_prompt}"
+                    }
+                ]
+            }
+        ]
+        
+        # Add images to the message
+        for img in images:
+            messages[1]["content"].append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{img['base64']}",
+                    "detail": "high"
+                }
+            })
+        
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=4000,
+                temperature=0.3
+            )
+            
+            vision_analysis = response.choices[0].message.content
+            
+            return {
+                'success': True,
+                'analysis': vision_analysis,
+                'pages_analyzed': len(images)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def generate_ai_report(self, use_vision: bool = True, checklist: dict = None, custom_instructions: str = "") -> str:
         """Generate a professional HTML report using OpenAI"""
         if not OPENAI_AVAILABLE:
             return self.generate_summary_report()
@@ -477,6 +586,26 @@ End of Report
         # Prepare analysis data for the AI
         analysis_data = self.export_json()
         info = self.analysis.project_info
+        
+        # Get vision analysis if enabled
+        vision_results = ""
+        if use_vision:
+            vision_data = self.analyze_with_vision(checklist)
+            if vision_data.get('success'):
+                vision_results = f"\n\nVISION ANALYSIS OF PLAN SHEETS:\n{vision_data['analysis']}"
+        
+        # Build checklist section if provided
+        checklist_section = ""
+        if checklist:
+            checklist_section = f"\n\nCHECKLIST TO VERIFY ({checklist.get('name', 'Custom')}):\n"
+            for item in checklist.get('items', []):
+                req = "REQUIRED" if item.get('required') else "Optional"
+                checklist_section += f"- [{req}] {item['text']}\n"
+        
+        # Build custom instructions section
+        custom_instructions_section = ""
+        if custom_instructions and custom_instructions.strip():
+            custom_instructions_section = f"\n\nSPECIAL INSTRUCTIONS FROM REVIEWER:\n{custom_instructions.strip()}\n"
         
         # Extract first few pages of text for context (limit to avoid token limits)
         sample_text = ""
@@ -501,6 +630,9 @@ ANALYSIS DATA:
 - Key Features: {', '.join(self.analysis.key_features) or 'None identified'}
 - Review Flags: {', '.join(self.analysis.review_flags) or 'None'}
 - Sheet Index: {json.dumps(self.analysis.sheet_index, indent=2)}
+{vision_results}
+{checklist_section}
+{custom_instructions_section}
 
 SAMPLE TEXT FROM PLAN SET:
 {sample_text[:4000]}

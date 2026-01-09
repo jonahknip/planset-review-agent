@@ -572,120 +572,288 @@ Be thorough and specific. Note anything that appears incomplete or requires foll
             return {'success': False, 'error': str(e)}
 
     def generate_ai_report(self, use_vision: bool = True, checklist: dict = None, custom_instructions: str = "") -> str:
-        """Generate a professional HTML report using OpenAI"""
-        if not OPENAI_AVAILABLE:
-            return self.generate_summary_report()
+        """Generate a professional QA/QC review report with actual checklist evaluation"""
         
         api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
+        
+        if not OPENAI_AVAILABLE or not api_key:
             return self.generate_summary_report()
         
         if not self.analysis.total_sheets:
             self.perform_full_analysis()
         
-        # Prepare analysis data for the AI
-        analysis_data = self.export_json()
         info = self.analysis.project_info
+        review_date = datetime.now().strftime('%B %d, %Y')
         
         # Get vision analysis if enabled
         vision_results = ""
         if use_vision:
             vision_data = self.analyze_with_vision(checklist)
             if vision_data.get('success'):
-                vision_results = f"\n\nVISION ANALYSIS OF PLAN SHEETS:\n{vision_data['analysis']}"
+                vision_results = vision_data['analysis']
         
-        # Build checklist section if provided
-        checklist_section = ""
-        if checklist:
-            checklist_section = f"\n\nCHECKLIST TO VERIFY ({checklist.get('name', 'Custom')}):\n"
-            for item in checklist.get('items', []):
-                req = "REQUIRED" if item.get('required') else "Optional"
-                checklist_section += f"- [{req}] {item['text']}\n"
-        
-        # Build custom instructions section
-        custom_instructions_section = ""
-        if custom_instructions and custom_instructions.strip():
-            custom_instructions_section = f"\n\nSPECIAL INSTRUCTIONS FROM REVIEWER:\n{custom_instructions.strip()}\n"
-        
-        # Extract first few pages of text for context (limit to avoid token limits)
+        # Extract text from plan set for context
         sample_text = ""
-        for i, page in enumerate(self.doc[:5]):  # First 5 pages
-            sample_text += f"\n--- Page {i+1} ---\n"
-            sample_text += page.get_text()[:2000]  # Limit per page
+        if self.doc and len(self.doc) > 0:
+            max_pages = min(5, len(self.doc))
+            for i in range(max_pages):
+                page = self.doc[i]
+                sample_text += f"\n--- Page {i+1} ---\n"
+                sample_text += page.get_text()[:2000]
         
-        prompt = f"""You are a senior Civil Engineering Project Manager reviewing a construction plan set. 
-Generate a professional, detailed review report in HTML format that looks like a formal Word document.
-
-ANALYSIS DATA:
-- Project Name: {info.project_name or 'Not identified'}
-- Project Number: {info.project_number or 'Not identified'}
-- Location: {info.location or 'Not identified'}
-- Owner/Client: {info.owner or 'Not identified'}
-- Engineer of Record: {info.engineer_of_record or 'Not identified'}
-- PE License: {info.engineer_license or 'Not identified'}
-- Total Sheets: {self.analysis.total_sheets}
-- Station Range: {self.analysis.station_range[0] or 'N/A'} to {self.analysis.station_range[1] or 'N/A'}
-- Completeness Score: {self.analysis.completeness_score:.0f}%
-- Disciplines Covered: {', '.join(self.analysis.disciplines_covered) or 'None identified'}
-- Key Features: {', '.join(self.analysis.key_features) or 'None identified'}
-- Review Flags: {', '.join(self.analysis.review_flags) or 'None'}
-- Sheet Index: {json.dumps(self.analysis.sheet_index, indent=2)}
-{vision_results}
-{checklist_section}
-{custom_instructions_section}
-
-SAMPLE TEXT FROM PLAN SET:
-{sample_text[:4000]}
-
-Generate an HTML report with these sections:
-1. HEADER - Project title, date, reviewer info
-2. EXECUTIVE SUMMARY - Brief overview of the project scope and status
-3. PROJECT INFORMATION - Table with all project details
-4. PLAN SET CONTENTS - Summary of sheets and disciplines
-5. KEY FINDINGS - Important observations from the review
-6. ITEMS REQUIRING ATTENTION - Issues, missing items, flags
-7. RECOMMENDATIONS - Specific action items for the PM
-8. NEXT STEPS - Prioritized to-do list with checkboxes
-
-Use professional styling:
-- Clean typography with proper headings (h1, h2, h3)
-- Tables with borders for data
-- Bullet points and numbered lists
-- Color coding: red for critical issues, orange for warnings, green for complete items
-- Professional blue header bar
-- Proper spacing and margins
-
-Return ONLY the HTML content (no markdown, no code blocks). Start with a <div> wrapper."""
-
-        try:
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a professional civil engineering project manager. Generate clean, professional HTML reports."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=4000,
-                temperature=0.7
-            )
+        # Project info
+        project_name = info.project_name or 'Project Name Not Identified'
+        project_number = info.project_number or 'N/A'
+        location = info.location or 'Location Not Identified'
+        owner = info.owner or 'Owner Not Identified'
+        engineer = info.engineer_of_record or 'Engineer Not Identified'
+        total_sheets = self.analysis.total_sheets
+        
+        checklist_name = checklist.get('name', 'QA/QC Review') if checklist else 'General Review'
+        checklist_phase = checklist.get('phase', '') if checklist else 'General'
+        
+        # Build checklist items for AI evaluation
+        checklist_items_for_ai = []
+        if checklist and checklist.get('items'):
+            for item in checklist.get('items', []):
+                checklist_items_for_ai.append({
+                    'id': item.get('id', ''),
+                    'text': item.get('text', ''),
+                    'required': item.get('required', False)
+                })
+        
+        # Evaluate checklist items using AI
+        eval_dict = {}
+        
+        if checklist_items_for_ai:
+            # Ask AI to evaluate each item and return JSON
+            items_text = "\n".join([f"- {item['id']}: {item['text']}" for item in checklist_items_for_ai])
             
-            html_report = response.choices[0].message.content
-            
-            # Clean up any markdown code block markers if present
-            html_report = html_report.strip()
-            if html_report.startswith('```html'):
-                html_report = html_report[7:]
-            if html_report.startswith('```'):
-                html_report = html_report[3:]
-            if html_report.endswith('```'):
-                html_report = html_report[:-3]
-            
-            return html_report.strip()
-            
-        except Exception as e:
-            # Fall back to basic report on error
-            print(f"OpenAI error: {e}")
-            return self.generate_summary_report()
+            eval_prompt = f"""You are an expert civil engineering QA/QC reviewer. Evaluate each checklist item based on what you can determine from the plan analysis.
+
+VISION ANALYSIS OF PLAN SHEETS:
+{vision_results[:6000] if vision_results else 'No vision analysis available'}
+
+EXTRACTED TEXT FROM PLANS:
+{sample_text[:3000]}
+
+PROJECT INFO:
+- Total Sheets: {total_sheets}
+- Disciplines Found: {', '.join(self.analysis.disciplines_covered)}
+- Key Features: {', '.join(self.analysis.key_features)}
+
+CHECKLIST ITEMS TO EVALUATE:
+{items_text}
+
+IMPORTANT: Actually analyze the drawings and determine if each item passes or fails. Do NOT just mark everything as "REVIEW" - make a determination based on the evidence.
+
+Return a JSON array with your evaluation of each item. Format:
+[
+  {{"id": "item-001", "status": "PASS", "comment": "Verified - north arrow present on cover sheet and all plan sheets"}},
+  {{"id": "item-002", "status": "FAIL", "comment": "Title block missing revision date on sheets 3-5"}},
+  {{"id": "item-003", "status": "REVIEW", "comment": "Cannot verify utility depths from available information - field verification needed"}},
+  {{"id": "item-004", "status": "N/A", "comment": "No bridge work in this project scope"}}
+]
+
+Status options:
+- PASS = Item is clearly verified/met in the plans (give specific evidence)
+- FAIL = Item is NOT met, missing, or has issues (explain what's wrong)
+- REVIEW = Cannot definitively determine - needs manual check
+- N/A = Does not apply to this project type
+
+Be specific and provide actionable comments. Return ONLY the JSON array."""
+
+            try:
+                client = OpenAI(api_key=api_key)
+                
+                eval_response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are a civil engineering QA/QC reviewer. Evaluate checklist items based on actual plan content. Return JSON only."},
+                        {"role": "user", "content": eval_prompt}
+                    ],
+                    max_tokens=8000,
+                    temperature=0.1
+                )
+                
+                eval_text = eval_response.choices[0].message.content.strip()
+                # Clean markdown if present
+                if eval_text.startswith('```'):
+                    eval_text = eval_text.split('\n', 1)[1] if '\n' in eval_text else eval_text[3:]
+                if eval_text.endswith('```'):
+                    eval_text = eval_text[:-3]
+                eval_text = eval_text.strip()
+                if eval_text.startswith('json'):
+                    eval_text = eval_text[4:].strip()
+                
+                evaluations = json.loads(eval_text)
+                eval_dict = {e['id']: e for e in evaluations}
+                
+            except Exception as e:
+                print(f"AI evaluation error: {e}")
+                # Default to REVIEW if AI fails
+                eval_dict = {item['id']: {'id': item['id'], 'status': 'REVIEW', 'comment': 'Requires manual verification'} for item in checklist_items_for_ai}
+        
+        # Count statuses
+        counts = {'PASS': 0, 'FAIL': 0, 'REVIEW': 0, 'N/A': 0}
+        for item in checklist_items_for_ai:
+            status = eval_dict.get(item['id'], {}).get('status', 'REVIEW')
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts['REVIEW'] += 1
+        
+        # Build HTML report
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {{ font-family: 'Segoe UI', Calibri, Arial, sans-serif; margin: 0; padding: 40px; color: #333; background: #fff; }}
+.report {{ max-width: 900px; margin: 0 auto; }}
+.header {{ text-align: center; border-bottom: 4px solid #C8102E; padding-bottom: 25px; margin-bottom: 30px; }}
+.header .company {{ font-size: 12px; letter-spacing: 3px; color: #666; margin-bottom: 15px; }}
+.header h1 {{ color: #1B365D; font-size: 28px; margin: 0 0 8px 0; }}
+.header .phase {{ color: #666; font-size: 16px; margin: 0; }}
+.header .date {{ color: #999; font-size: 14px; margin-top: 15px; }}
+.info-section {{ margin-bottom: 30px; }}
+.info-section h2 {{ font-size: 14px; color: #1B365D; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid #1B365D; padding-bottom: 8px; margin-bottom: 15px; }}
+.info-table {{ width: 100%; border-collapse: collapse; }}
+.info-table td {{ padding: 10px 15px; border: 1px solid #ddd; font-size: 13px; }}
+.info-table td:first-child {{ background: #f5f5f5; font-weight: 600; width: 200px; }}
+.summary {{ display: flex; justify-content: center; gap: 20px; margin: 30px 0; }}
+.summary-box {{ text-align: center; padding: 20px 30px; border-radius: 8px; min-width: 100px; }}
+.summary-box.pass {{ background: #d4edda; border: 2px solid #28a745; }}
+.summary-box.fail {{ background: #f8d7da; border: 2px solid #dc3545; }}
+.summary-box.review {{ background: #fff3cd; border: 2px solid #ffc107; }}
+.summary-box.na {{ background: #e9ecef; border: 2px solid #6c757d; }}
+.summary-box .count {{ font-size: 36px; font-weight: 700; display: block; }}
+.summary-box.pass .count {{ color: #28a745; }}
+.summary-box.fail .count {{ color: #dc3545; }}
+.summary-box.review .count {{ color: #856404; }}
+.summary-box.na .count {{ color: #6c757d; }}
+.summary-box .label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }}
+.checklist {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+.checklist th {{ background: #1B365D; color: white; padding: 12px; text-align: left; font-size: 12px; font-weight: 600; }}
+.checklist td {{ padding: 10px 12px; border: 1px solid #ddd; font-size: 12px; vertical-align: top; }}
+.checklist tr:nth-child(even) {{ background: #fafafa; }}
+.badge {{ display: inline-block; padding: 4px 10px; border-radius: 4px; color: white; font-size: 10px; font-weight: 700; text-transform: uppercase; }}
+.badge-pass {{ background: #28a745; }}
+.badge-fail {{ background: #dc3545; }}
+.badge-review {{ background: #ffc107; color: #333; }}
+.badge-na {{ background: #6c757d; }}
+.findings {{ background: #f8f9fa; padding: 25px; margin: 30px 0; border-left: 5px solid #C8102E; }}
+.findings h2 {{ color: #1B365D; font-size: 18px; margin: 0 0 20px 0; }}
+.findings h3 {{ font-size: 14px; margin: 20px 0 10px 0; }}
+.findings h3.critical {{ color: #dc3545; }}
+.findings h3.review {{ color: #856404; }}
+.findings ul {{ margin: 0 0 15px 0; padding-left: 25px; }}
+.findings li {{ margin: 8px 0; font-size: 13px; }}
+.footer {{ text-align: center; margin-top: 40px; padding-top: 20px; border-top: 2px solid #eee; font-size: 11px; color: #999; }}
+</style>
+</head>
+<body>
+<div class="report">
+
+<div class="header">
+<div class="company">ABONMARCHE</div>
+<h1>{checklist_name}</h1>
+<p class="phase">{checklist_phase} Design Phase Review</p>
+<p class="date">Review Date: {review_date}</p>
+</div>
+
+<div class="info-section">
+<h2>Project Information</h2>
+<table class="info-table">
+<tr><td>Project Name</td><td>{project_name}</td></tr>
+<tr><td>Project Number</td><td>{project_number}</td></tr>
+<tr><td>Location</td><td>{location}</td></tr>
+<tr><td>Client / Owner</td><td>{owner}</td></tr>
+<tr><td>Engineer of Record</td><td>{engineer}</td></tr>
+<tr><td>Total Sheets Reviewed</td><td>{total_sheets}</td></tr>
+<tr><td>Reviewed By</td><td>AI-Assisted Review (Abonmarche Plan Review)</td></tr>
+</table>
+</div>
+
+<div class="summary">
+<div class="summary-box pass"><span class="count">{counts['PASS']}</span><span class="label">Pass</span></div>
+<div class="summary-box fail"><span class="count">{counts['FAIL']}</span><span class="label">Fail</span></div>
+<div class="summary-box review"><span class="count">{counts['REVIEW']}</span><span class="label">Review</span></div>
+<div class="summary-box na"><span class="count">{counts['N/A']}</span><span class="label">N/A</span></div>
+</div>
+'''
+        
+        # Build checklist table
+        fail_items = []
+        review_items = []
+        
+        if checklist_items_for_ai:
+            html += '''
+<table class="checklist">
+<tr><th style="width: 70px;">Status</th><th style="width: 100px;">ID</th><th style="width: 40%;">Checklist Item</th><th>Comments</th></tr>
+'''
+            for item in checklist_items_for_ai:
+                eval_data = eval_dict.get(item['id'], {'status': 'REVIEW', 'comment': 'Requires manual verification'})
+                status = eval_data.get('status', 'REVIEW')
+                comment = eval_data.get('comment', '')
+                
+                # Track fails and reviews
+                if status == 'FAIL':
+                    fail_items.append(f"{item['id']}: {comment}")
+                elif status == 'REVIEW':
+                    review_items.append(f"{item['id']}: {comment}")
+                
+                badge_class = 'badge-' + status.lower().replace('/', '')
+                if status == 'N/A':
+                    badge_class = 'badge-na'
+                
+                html += f'''<tr>
+<td style="text-align: center;"><span class="badge {badge_class}">{status}</span></td>
+<td style="font-family: monospace; font-size: 11px; color: #666;">{item['id']}</td>
+<td>{item['text']}</td>
+<td style="color: #666; font-style: italic;">{comment}</td>
+</tr>
+'''
+            html += '</table>\n'
+        
+        # Add findings section
+        html += '''
+<div class="findings">
+<h2>Key Findings & Recommendations</h2>
+'''
+        
+        if fail_items:
+            html += '<h3 class="critical">Critical Issues (Action Required)</h3>\n<ul>\n'
+            for item in fail_items[:10]:
+                html += f'<li>{item}</li>\n'
+            html += '</ul>\n'
+        else:
+            html += '<h3 class="critical">Critical Issues</h3>\n<p>No critical issues identified.</p>\n'
+        
+        if review_items:
+            html += '<h3 class="review">Items Requiring Manual Review</h3>\n<ul>\n'
+            for item in review_items[:10]:
+                html += f'<li>{item}</li>\n'
+            html += '</ul>\n'
+        else:
+            html += '<h3 class="review">Items Requiring Manual Review</h3>\n<p>No items flagged for manual review.</p>\n'
+        
+        html += f'''
+<h3>General Observations</h3>
+<p>This {checklist_phase} review evaluated {len(checklist_items_for_ai)} checklist items. 
+{counts['PASS']} items passed verification, {counts['FAIL']} items require attention, 
+{counts['REVIEW']} items need manual verification, and {counts['N/A']} items were not applicable.</p>
+</div>
+
+<div class="footer">
+Generated by Abonmarche Plan Review | {review_date}
+</div>
+
+</div>
+</body>
+</html>'''
+        
+        return html
 
 
 def main():
